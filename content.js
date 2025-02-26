@@ -4,10 +4,41 @@ function getConversationId() {
     return match ? match[1] : 'default';
 }
 
-// Function to get the input textarea element
+// Function to get the input element (contenteditable div)
 function getInputElement() {
-    // ChatGPT uses a textarea with role="textbox"
-    return document.querySelector('textarea[role="textbox"]');
+    // Try multiple possible selectors for better compatibility
+    return document.querySelector('#prompt-textarea[contenteditable="true"]') ||
+           document.querySelector('div[contenteditable="true"][role="textbox"]') ||
+           document.querySelector('div[contenteditable="true"]');
+}
+
+// Function to get text content from input
+function getInputText(element) {
+    // Use textContent to get plain text without HTML formatting
+    return element?.textContent?.trim() || '';
+}
+
+// Function to set text content in input
+function setInputText(element, text) {
+    if (!element) return;
+    
+    // Set the text content
+    element.textContent = text;
+    
+    // Place cursor at the end of the text
+    const selection = window.getSelection();
+    const range = document.createRange();
+    range.selectNodeContents(element);
+    range.collapse(false); // false means collapse to end
+    selection.removeAllRanges();
+    selection.addRange(range);
+    
+    // Trigger both input and change events for better compatibility
+    element.dispatchEvent(new Event('input', { bubbles: true }));
+    element.dispatchEvent(new Event('change', { bubbles: true }));
+    
+    // Focus the element
+    element.focus();
 }
 
 // Function to save draft
@@ -20,9 +51,9 @@ async function saveDraft(text) {
     
     try {
         await chrome.storage.local.set({ [conversationId]: data });
-        console.log('Draft saved for conversation:', conversationId);
+        // console.log('Draft saved for conversation:', conversationId);
     } catch (error) {
-        console.error('Error saving draft:', error);
+        // console.error('Error saving draft:', error);
     }
 }
 
@@ -37,14 +68,12 @@ async function restoreDraft() {
         if (data?.text) {
             const input = getInputElement();
             if (input) {
-                input.value = data.text;
-                // Trigger input event to ensure ChatGPT's UI updates
-                input.dispatchEvent(new Event('input', { bubbles: true }));
-                console.log('Draft restored for conversation:', conversationId);
+                setInputText(input, data.text);
+                // console.log('Draft restored for conversation:', conversationId);
             }
         }
     } catch (error) {
-        console.error('Error restoring draft:', error);
+        // console.error('Error restoring draft:', error);
     }
 }
 
@@ -54,44 +83,58 @@ async function clearDraft() {
     
     try {
         await chrome.storage.local.remove(conversationId);
-        console.log('Draft cleared for conversation:', conversationId);
+        // console.log('Draft cleared for conversation:', conversationId);
     } catch (error) {
-        console.error('Error clearing draft:', error);
+        // console.error('Error clearing draft:', error);
     }
 }
 
 // Function to initialize input monitoring
 function initializeInputMonitoring() {
     let debounceTimer;
+    let currentInput = null;
     
     // Monitor DOM for input element (it might load dynamically)
     const observer = new MutationObserver((mutations, obs) => {
         const input = getInputElement();
-        if (input) {
-            obs.disconnect(); // Stop observing once we find the input
+        if (input && input !== currentInput) {
+            currentInput = input;
             
             // Restore any saved draft
             restoreDraft();
             
             // Listen for input changes
-            input.addEventListener('input', (e) => {
+            const handleInput = (e) => {
                 clearTimeout(debounceTimer);
                 debounceTimer = setTimeout(() => {
-                    saveDraft(e.target.value);
+                    saveDraft(getInputText(e.target));
                 }, 1000); // Debounce save operations by 1 second
-            });
+            };
+            
+            input.addEventListener('input', handleInput);
+            input.addEventListener('keyup', handleInput); // Additional event for better compatibility
+            
+            // Find the closest form or submit button
+            const form
+            = input.closest('form');
+            const submitButton = document.querySelector('button[type="submit"]') ||
+                               document.querySelector('button[data-testid="send-button"]');
             
             // Clear draft when message is sent
-            input.closest('form')?.addEventListener('submit', () => {
-                clearDraft();
-            });
+            if (form) {
+                form.addEventListener('submit', clearDraft);
+            }
+            if (submitButton) {
+                submitButton.addEventListener('click', clearDraft);
+            }
         }
     });
     
     // Start observing the DOM
     observer.observe(document.body, {
         childList: true,
-        subtree: true
+        subtree: true,
+        characterData: true
     });
 }
 
